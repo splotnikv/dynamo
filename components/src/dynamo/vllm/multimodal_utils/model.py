@@ -27,6 +27,7 @@ class SupportedModels:
     """Supported multimodal model identifiers"""
 
     LLAVA_1_5_7B = "llava-hf/llava-1.5-7b-hf"
+    QWEN_2_5_VL_3B = "Qwen/Qwen2.5-VL-3B-Instruct"
     QWEN_2_5_VL_7B = "Qwen/Qwen2.5-VL-7B-Instruct"
     LLAVA_NEXT_VIDEO_7B = "llava-hf/LLaVA-NeXT-Video-7B-hf"
 
@@ -132,7 +133,7 @@ def construct_mm_data(
     image_embeds = image_embeds.to(embeddings_dtype)
 
     # Model-specific image handling
-    if is_model_supported(model, SupportedModels.QWEN_2_5_VL_7B):
+    if is_model_supported(model, SupportedModels.QWEN_2_5_VL_3B) or is_model_supported(model, SupportedModels.QWEN_2_5_VL_7B):
         return _construct_qwen_image_data(image_embeds, image_grid_thw)
     else:
         # Default image handling for other models (e.g., LLAVA_1_5_7B)

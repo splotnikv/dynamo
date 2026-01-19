@@ -40,15 +40,49 @@ ARG NIXL_REF=0.7.0
 # Python configuration
 ARG PYTHON_VERSION=3.12
 
+ARG http_proxy=""
+ARG https_proxy=""
+ARG no_proxy=""
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY=""
+
 ##################################
 ########## Base Image ############
 ##################################
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS base
 
-RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && \
-    echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list && \
-    add-apt-repository -y ppa:kobuk-team/intel-graphics
+ENV http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    gnupg \
+    software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+    | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && \
+    echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+    | tee /etc/apt/sources.list.d/oneAPI.list
+
+RUN wget -O- "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F" \
+    | gpg --dearmor | tee /usr/share/keyrings/kobuk-team-intel-graphics.gpg > /dev/null && \
+    echo "deb [signed-by=/usr/share/keyrings/kobuk-team-intel-graphics.gpg] https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu $(lsb_release -cs) main" \
+    | tee /etc/apt/sources.list.d/kobuk-team-intel-graphics.list && \
+    apt-get update
+
+RUN if [ -n "${http_proxy}" ]; then \
+        echo "Acquire::http::Proxy \"${http_proxy}\";" > /etc/apt/apt.conf.d/99proxy; \
+    fi && \
+    if [ -n "${https_proxy}" ]; then \
+        echo "Acquire::https::Proxy \"${https_proxy}\";" >> /etc/apt/apt.conf.d/99proxy; \
+    fi
 
 # Redeclare ARGs for this stage
 ARG ARCH
@@ -62,6 +96,13 @@ ARG NIXL_REF
 
 USER root
 WORKDIR /opt/dynamo
+
+RUN if [ -n "${http_proxy}" ] || [ -n "${https_proxy}" ]; then \
+        echo "# Proxy configuration for wget" > /root/.wgetrc; \
+        [ -n "${http_proxy}" ] && echo "http_proxy = ${http_proxy}" >> /root/.wgetrc; \
+        [ -n "${https_proxy}" ] && echo "https_proxy = ${https_proxy}" >> /root/.wgetrc; \
+        echo "use_proxy = on" >> /root/.wgetrc; \
+    fi
 
 RUN wget https://raw.githubusercontent.com/intel/llm-scaler/main/vllm/patches/ai-dynamo-xpu/patches/ucx.patch -O /tmp/ucx.patch
 
@@ -224,8 +265,11 @@ RUN --mount=type=secret,id=aws-key-id,env=AWS_ACCESS_KEY_ID \
     git clone --depth 1 --branch ${NIXL_REF} "https://github.com/ai-dynamo/nixl.git" && \
     cd nixl && \
     mkdir build && \
-    meson setup build/ --prefix=/opt/intel/intel_nixl --buildtype=release \
-    -Ducx_path="/usr/local/ucx" && \
+    if [ -d /usr/local/cuda ]; then mv /usr/local/cuda /usr/local/cuda.disabled; fi && \
+    CUDA_HOME="" CUDA_PATH="" PKG_CONFIG_PATH="" meson setup build/ --prefix=/opt/intel/intel_nixl --buildtype=release \
+    -Ducx_path="/usr/local/ucx" \
+    -Ddisable_gds_backend=true && \
+    if [ -d /usr/local/cuda.disabled ]; then mv /usr/local/cuda.disabled /usr/local/cuda; fi && \
     cd build && \
     ninja && \
     ninja install && \
@@ -267,6 +311,20 @@ ARG SCCACHE_BUCKET
 ARG SCCACHE_REGION
 ARG NIXL_UCX_REF
 ARG NIXL_REF
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
+ENV http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
 
 WORKDIR /workspace
 

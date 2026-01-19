@@ -34,6 +34,13 @@ ARG ARCH_ALT=x86_64
 # Python configuration
 ARG PYTHON_VERSION=3.12
 
+ARG http_proxy=""
+ARG https_proxy=""
+ARG no_proxy=""
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY=""
+
 ARG DYNAMO_BASE_IMAGE="dynamo:latest-none"
 FROM ${DYNAMO_BASE_IMAGE} AS dynamo_base
 
@@ -57,6 +64,27 @@ FROM ${DYNAMO_BASE_IMAGE} AS dynamo_base
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS framework
 
 ARG PYTHON_VERSION
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
+ENV http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+RUN if [ -n "${http_proxy}" ] || [ -n "${https_proxy}" ]; then \
+        echo "# Proxy configuration for wget" > /root/.wgetrc; \
+        [ -n "${http_proxy}" ] && echo "http_proxy = ${http_proxy}" >> /root/.wgetrc; \
+        [ -n "${https_proxy}" ] && echo "https_proxy = ${https_proxy}" >> /root/.wgetrc; \
+        echo "use_proxy = on" >> /root/.wgetrc; \
+    fi
 
 RUN apt-get update -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -149,6 +177,27 @@ RUN --mount=type=bind,source=./container/xpu/deps/,target=/tmp/deps \
 #
 
 FROM ${RUNTIME_IMAGE}:${RUNTIME_IMAGE_TAG} AS runtime
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
+ENV http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+RUN if [ -n "${http_proxy}" ] || [ -n "${https_proxy}" ]; then \
+        echo "# Proxy configuration for wget" > /root/.wgetrc; \
+        [ -n "${http_proxy}" ] && echo "http_proxy = ${http_proxy}" >> /root/.wgetrc; \
+        [ -n "${https_proxy}" ] && echo "https_proxy = ${https_proxy}" >> /root/.wgetrc; \
+        echo "use_proxy = on" >> /root/.wgetrc; \
+    fi
 
 RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && \
     echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list && \
