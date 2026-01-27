@@ -16,6 +16,7 @@ from dynamo.vllm.multimodal_utils.model import (
     SupportedModels,
     construct_mm_data,
     load_vision_model,
+    load_vision_model_venc_only,
 )
 from dynamo.vllm.multimodal_utils.protocol import (
     MultiModalInput,
@@ -35,6 +36,7 @@ __all__ = [
     "SupportedModels",
     "construct_mm_data",
     "load_vision_model",
+    "load_vision_model_venc_only",
     "MultiModalInput",
     "MultiModalRequest",
     "MyRequestOutput",

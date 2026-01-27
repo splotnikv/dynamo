@@ -88,7 +88,7 @@ def encode_image_embeddings(
 
             embeddings = projector(vision_outputs.last_hidden_state)
 
-        elif is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_3B) or is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_7B):
+        elif is_model_supported(model_name, SupportedModels.QWEN_2_5_VL):
             embeddings = get_qwen_image_features(vision_encoder, image_embeds)
 
         else:
@@ -123,7 +123,7 @@ def get_encoder_components(
         projector = getattr(vision_model, "multi_modal_projector", None)
         return vision_encoder, projector
 
-    elif is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_3B) or is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_7B):
+    elif is_model_supported(model_name, SupportedModels.QWEN_2_5_VL):
         vision_encoder = vision_model
         projector = None
         return vision_encoder, projector

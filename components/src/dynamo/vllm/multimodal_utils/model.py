@@ -23,12 +23,18 @@ from transformers import AutoModel
 logger = logging.getLogger(__name__)
 
 
+import re
+class RegexString(str):
+    def __new__(cls, value):
+        obj = str.__new__(cls, value)
+        obj.regex = True
+        return obj
+
 class SupportedModels:
     """Supported multimodal model identifiers"""
 
     LLAVA_1_5_7B = "llava-hf/llava-1.5-7b-hf"
-    QWEN_2_5_VL_3B = "Qwen/Qwen2.5-VL-3B-Instruct"
-    QWEN_2_5_VL_7B = "Qwen/Qwen2.5-VL-7B-Instruct"
+    QWEN_2_5_VL = RegexString(r"Qwen/Qwen2\.5-VL-\d{1,2}B-Instruct")
     LLAVA_NEXT_VIDEO_7B = "llava-hf/LLaVA-NeXT-Video-7B-hf"
 
 
@@ -96,9 +102,12 @@ def is_model_supported(model_name: str, supported_model: str) -> bool:
         True if the model is supported, False otherwise
     """
     normalized_name = normalize_model_name(model_name).lower()
-    normalized_supported = normalize_model_name(supported_model).lower()
 
-    return normalized_name == normalized_supported
+    if hasattr(supported_model, 'regex') and supported_model.regex:
+        return bool(re.match(supported_model, normalized_name, re.IGNORECASE))
+    else:
+        normalized_supported = normalize_model_name(supported_model).lower()
+        return normalized_name == normalized_supported
 
 
 def load_vision_model(model_id: str) -> torch.nn.Module:
@@ -108,6 +117,86 @@ def load_vision_model(model_id: str) -> torch.nn.Module:
     model = AutoModel.from_pretrained(
         model_id, device_map="auto", torch_dtype=torch.float16, trust_remote_code=True
     )
+    return model
+
+
+import torch
+import torch.nn as nn
+import json
+from transformers import AutoConfig
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+    Qwen2_5_VisionTransformerPretrainedModel,
+    Qwen2_5_VLModel,
+)
+from transformers.utils import cached_file
+from safetensors import safe_open
+
+
+class Qwen2_5_VLModel_VisionOnly(Qwen2_5_VLModel):
+    def __init__(self):
+        nn.Module.__init__(self)
+
+
+def load_vision_model_venc_only(model_id: str) -> torch.nn.Module:
+    torch_dtype = torch.float16
+
+    # Load full config, then extract vision config
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
+    if not hasattr(config, 'vision_config'):
+        raise ValueError(f"Model {model_id} does not have a vision_config.")
+    vision_config = config.vision_config
+
+    # Instantiate only vision encoder
+    vision_encoder = Qwen2_5_VisionTransformerPretrainedModel._from_config(
+        vision_config,
+        torch_dtype=torch_dtype,
+    )
+
+    # Download weight index file.
+    index_file = cached_file(
+        model_id,
+        "model.safetensors.index.json",
+    )
+
+    # Load index to find vision weights
+    with open(index_file, 'r') as f:
+        index = json.load(f)
+    
+    # Find which shard files contain vision encoder weights.
+    vision_weight_files = set()
+    weight_map = index.get('weight_map', {})
+    for param_name, file_name in weight_map.items():
+        if 'visual.' in param_name and not 'language_model' in param_name:
+            vision_weight_files.add(file_name)
+    
+    # Download only the necessary shard files
+    weight_files = []
+    for file_name in vision_weight_files:
+        weight_file = cached_file(model_id, file_name)
+        weight_files.append(weight_file)
+
+    # Load VT weights
+    state_dict = {}
+    for weight_file in weight_files:
+        if not weight_file.endswith('.safetensors'):
+            raise ValueError(f"Unsupported weights format for {model_id}.")
+        with safe_open(weight_file, framework='pt', device='cpu') as f:
+            for key in f.keys():
+                if 'visual.' in key:
+                    clean_key = key.replace('visual.', '')
+                    state_dict[clean_key] = f.get_tensor(key)
+
+    # Load the filtered state dict into the vision model
+    missing_keys, unexpected_keys = vision_encoder.load_state_dict(state_dict, strict=False)
+    if missing_keys or unexpected_keys:
+        raise ValueError(f"Failed to load model weights for {model_id}.")
+    
+    #move to device
+    vision_encoder = vision_encoder.to('xpu')
+    vision_encoder.eval()
+
+    model = Qwen2_5_VLModel_VisionOnly()
+    model.visual = vision_encoder
     return model
 
 
@@ -133,7 +222,7 @@ def construct_mm_data(
     image_embeds = image_embeds.to(embeddings_dtype)
 
     # Model-specific image handling
-    if is_model_supported(model, SupportedModels.QWEN_2_5_VL_3B) or is_model_supported(model, SupportedModels.QWEN_2_5_VL_7B):
+    if is_model_supported(model, SupportedModels.QWEN_2_5_VL):
         return _construct_qwen_image_data(image_embeds, image_grid_thw)
     else:
         # Default image handling for other models (e.g., LLAVA_1_5_7B)

@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 class SupportedModels:
     """Supported multimodal model identifiers"""
 
-    QWEN_2_5_VL_3B = "Qwen/Qwen2.5-VL-3B-Instruct"
     QWEN_2_5_VL_7B = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
@@ -142,7 +141,7 @@ def encode_image_embeddings(
     """
     with torch.no_grad():
         # Route through the correct encoder based on model
-        if is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_3B) or is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_7B):
+        if is_model_supported(model_name, SupportedModels.QWEN_2_5_VL_7B):
             embeddings = get_qwen_image_features(vision_encoder, image_embeds)
 
         else:

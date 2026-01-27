@@ -16,6 +16,7 @@ from ..multimodal_utils import (
     encode_image_embeddings,
     get_encoder_components,
     load_vision_model,
+    load_vision_model_venc_only,
     vLLMMultimodalRequest,
 )
 
@@ -51,7 +52,7 @@ class EncodeWorkerHandler:
         self.image_processor = AutoImageProcessor.from_pretrained(
             self.model, trust_remote_code=True
         )
-        self.vision_model = load_vision_model(self.model)
+        self.vision_model = load_vision_model_venc_only(self.model)
         self.min_workers = 1
 
         # Get encoder components for the model
