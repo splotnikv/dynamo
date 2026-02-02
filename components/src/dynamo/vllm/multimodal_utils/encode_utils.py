@@ -55,6 +55,34 @@ def get_qwen_image_features(
     )
 
 
+def get_qwen_video_features(
+    vision_encoder: torch.nn.Module, video_embeds: Dict[str, Any]
+) -> torch.Tensor:
+    """
+    Extract video features using Qwen-style vision encoder.
+
+    Args:
+        vision_encoder: The vision encoder model
+        video_embeds: Dictionary containing pixel values and grid information
+
+    Returns:
+        Processed video features tensor
+
+    Raises:
+        ValueError: If video_grid_thw is not provided for Qwen model
+    """
+    pixel_values_videos = video_embeds["pixel_values_videos"].to(vision_encoder.device)
+
+    grid_thw = video_embeds.get("video_grid_thw", None)
+    if grid_thw is not None:
+        grid_thw = grid_thw.to(vision_encoder.device)
+        logger.debug(f"Qwen video_grid_thw shape: {grid_thw.shape}")
+    else:
+        raise ValueError("video_grid_thw is not provided")
+
+    return vision_encoder.get_video_features(pixel_values_videos, grid_thw)  # type: ignore
+
+
 def encode_image_embeddings(
     model_name: str,
     image_embeds: Dict[str, Any],
@@ -90,6 +118,48 @@ def encode_image_embeddings(
 
         elif is_model_supported(model_name, SupportedModels.QWEN_2_5_VL):
             embeddings = get_qwen_image_features(vision_encoder, image_embeds)
+
+        else:
+            raise NotImplementedError(f"Model not supported: {model_name}")
+
+        # Normalize output shape
+        if isinstance(embeddings, (tuple, list)):
+            embeddings = embeddings[0]
+        embeddings = embeddings.unsqueeze(0) if embeddings.ndim == 2 else embeddings
+
+        return embeddings
+
+
+def encode_video_embeddings(
+    model_name: str,
+    video_embeds: Dict[str, Any],
+    vision_encoder: torch.nn.Module,
+    projector: Optional[torch.nn.Module] = None,
+) -> torch.Tensor:
+    """
+    Encode video embeddings using the appropriate model-specific encoder.
+
+    Args:
+        model_name: The model identifier
+        video_embeds: Dictionary containing processed video data (pixel_values_videos, video_grid_thw)
+        vision_encoder: The vision encoder module
+        projector: The multimodal projector (required for LLaVA-style models)
+
+    Returns:
+        Encoded embeddings tensor with normalized shape
+
+    Raises:
+        ValueError: If projector is missing for LLaVA models
+        NotImplementedError: If model is not supported
+    """
+    with torch.no_grad():
+        # Route through the correct encoder based on model
+        if is_model_supported(model_name, SupportedModels.LLAVA_1_5_7B):
+            # LLaVA doesn't natively support video, would need frame-by-frame processing
+            raise NotImplementedError(f"Video encoding not supported for LLaVA model: {model_name}")
+
+        elif is_model_supported(model_name, SupportedModels.QWEN_2_5_VL):
+            embeddings = get_qwen_video_features(vision_encoder, video_embeds)
 
         else:
             raise NotImplementedError(f"Model not supported: {model_name}")

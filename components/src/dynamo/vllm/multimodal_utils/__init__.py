@@ -8,6 +8,7 @@ from dynamo.vllm.multimodal_utils.chat_processor import (
 )
 from dynamo.vllm.multimodal_utils.encode_utils import (
     encode_image_embeddings,
+    encode_video_embeddings,
     get_encoder_components,
 )
 from dynamo.vllm.multimodal_utils.http_client import get_http_client
@@ -30,6 +31,7 @@ __all__ = [
     "CompletionsProcessor",
     "ProcessMixIn",
     "encode_image_embeddings",
+    "encode_video_embeddings",
     "get_encoder_components",
     "get_http_client",
     "ImageLoader",

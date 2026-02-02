@@ -172,7 +172,15 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
                 request.serialized_request, descriptor
             )
             await read_op.wait_for_completion()
-            if "video" in self.config.model.lower():
+
+            if request.video_grid_thw is not None:
+                multi_modal_data = construct_mm_data(
+                    self.config.model,
+                    self.EMBEDDINGS_DTYPE,
+                    video_embeds=embeddings,
+                    video_grid_thw=request.video_grid_thw,
+                )
+            elif "video" in self.config.model.lower():
                 video_numpy = embeddings.numpy()
                 multi_modal_data = construct_mm_data(
                     self.config.model,

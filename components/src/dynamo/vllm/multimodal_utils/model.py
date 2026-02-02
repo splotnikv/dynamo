@@ -204,8 +204,10 @@ def construct_mm_data(
     model: str,
     embeddings_dtype: torch.dtype,
     image_embeds: Optional[torch.Tensor] = None,
+    video_embeds: Optional[torch.Tensor] = None,
     video_numpy: Optional[Any] = None,
     image_grid_thw: Optional[List[Any]] = None,
+    video_grid_thw: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Construct multimodal data for a vLLM request for models that require additional parameters alongside the embeddings"""
 
@@ -214,6 +216,10 @@ def construct_mm_data(
         if video_numpy is None:
             raise ValueError("No video frames provided.")
         return {"video": video_numpy}
+
+    # Handle Qwen 2.5 VL video embeddings
+    if video_embeds is not None and is_model_supported(model, SupportedModels.QWEN_2_5_VL):
+        return _construct_qwen_video_data(video_embeds.to(embeddings_dtype), video_grid_thw)
 
     # Handle image models - validate image embeddings first
     if image_embeds is None:
@@ -242,5 +248,22 @@ def _construct_qwen_image_data(
         "image": {
             "image_embeds": image_embeds.squeeze(0),
             "image_grid_thw": grid_thw_tensor,
+        }
+    }
+
+
+def _construct_qwen_video_data(
+    video_embeds: torch.Tensor, video_grid_thw: Optional[List[Any]]
+) -> Dict[str, Dict[str, torch.Tensor]]:
+    """Construct video data specifically for Qwen models."""
+    if video_grid_thw is None or len(video_grid_thw) == 0:
+        raise ValueError("No video grid provided for Qwen model.")
+
+    grid_thw_tensor = torch.tensor(video_grid_thw)
+
+    return {
+        "video": {
+            "video_embeds": video_embeds.squeeze(0),
+            "video_grid_thw": grid_thw_tensor,
         }
     }

@@ -27,6 +27,7 @@ from dynamo.runtime.logging import configure_dynamo_logging
 
 from .engine_monitor import VllmEngineMonitor
 from .multimodal_utils.image_loader import ImageLoader
+from vllm.multimodal.utils import MediaConnector
 
 # Multimodal data dictionary keys
 IMAGE_URL_KEY: Final = "image_url"
@@ -139,6 +140,7 @@ class BaseWorkerHandler(ABC):
         self.config = config
         self.engine_monitor = VllmEngineMonitor(runtime, engine)
         self.image_loader = ImageLoader()
+        self.media_connector = MediaConnector()
         self.temp_dirs: list[tempfile.TemporaryDirectory] = []
         self.model_max_len = model_max_len
         self.enable_multimodal = enable_multimodal
@@ -535,9 +537,26 @@ class BaseWorkerHandler(ABC):
             vllm_mm_data["image"] = images[0] if len(images) == 1 else images
             logger.debug(f"Extracted {len(images)} image(s) for multimodal processing")
 
-        # Handle video_url entries (future expansion)
-        if VIDEO_URL_KEY in mm_map:
-            logger.warning("Video multimodal data not yet supported in standard worker")
+        videos = []
+        for item in mm_map.get(VIDEO_URL_KEY, []):
+            if isinstance(item, dict) and URL_VARIANT_KEY in item:
+                url = item[URL_VARIANT_KEY]
+                try:
+                    video, mdata = await self.media_connector.fetch_video_async(url)
+                    videos.append(video)
+                    logger.debug(f"Loaded video from URL: {url[:80]}...")
+                except Exception:
+                    logger.exception(f"Failed to load video from {url[:80]}...")
+                    raise
+            elif isinstance(item, dict) and DECODED_VARIANT_KEY in item:
+                logger.warning(
+                    "Decoded video data not yet supported in standard worker"
+                )
+
+        if videos:
+            # vLLM expects single video or list
+            vllm_mm_data["video"] = videos[0] if len(videos) == 1 else videos
+            logger.debug(f"Extracted {len(videos)} video(s) for multimodal processing")
 
         return vllm_mm_data if vllm_mm_data else None
 
@@ -675,8 +694,26 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         # Extract and decode multimodal data if present
         multi_modal_data = await self._extract_multimodal_data(request)
 
+        token_ids = request["token_ids"]
+
+        if multi_modal_data and "video" in multi_modal_data:
+            tokenizer = await self.engine_client.get_tokenizer()
+            
+            im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+            im_end_positions = [i for i, t in enumerate(token_ids) if t == im_end_id]
+            
+            if len(im_end_positions) >= 2:
+                insert_pos = im_end_positions[1]
+
+                vision_start_id = tokenizer.convert_tokens_to_ids("<|vision_start|>")
+                video_pad_id = tokenizer.convert_tokens_to_ids("<|video_pad|>")
+                vision_end_id = tokenizer.convert_tokens_to_ids("<|vision_end|>")
+                video_placeholder_tokens = [vision_start_id, video_pad_id, vision_end_id]
+
+                token_ids = token_ids[:insert_pos] + video_placeholder_tokens + token_ids[insert_pos:]
+                
         prompt = TokensPrompt(
-            prompt_token_ids=request["token_ids"], multi_modal_data=multi_modal_data
+            prompt_token_ids=token_ids, multi_modal_data=multi_modal_data
         )
 
         # Build sampling params from request

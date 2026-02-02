@@ -144,6 +144,7 @@ class vLLMMultimodalRequest(vLLMGenerateRequest):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     multimodal_input: Optional[MultiModalInput] = Field(default_factory=MultiModalInput)
     image_grid_thw: Optional[List[Any]] = None
+    video_grid_thw: Optional[List[Any]] = None
     embeddings_shape: Optional[
         Union[Tuple[int, int, int], Tuple[int, int, int, int]]
     ] = None
