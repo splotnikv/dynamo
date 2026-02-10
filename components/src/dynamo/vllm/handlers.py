@@ -140,7 +140,18 @@ class BaseWorkerHandler(ABC):
         self.config = config
         self.engine_monitor = VllmEngineMonitor(runtime, engine)
         self.image_loader = ImageLoader()
-        self.media_connector = MediaConnector()
+
+        video_opts: dict[str, Any] = {}
+        num_frames = os.environ.get("DYNAMO_VIDEO_NUM_FRAMES")
+        if num_frames is not None:
+            video_opts["num_frames"] = int(num_frames)
+        if os.environ.get("DYNAMO_VIDEO_USE_HW_DEC", "").lower() in ("true", "1", "yes"):
+            video_opts["cv2_backend"] = "FFMPEG"
+            video_opts["hw_acceleration"] = "VAAPI"
+
+        media_io_kwargs = {"video": video_opts} if video_opts else {}
+        self.media_connector = MediaConnector(media_io_kwargs=media_io_kwargs)
+
         self.temp_dirs: list[tempfile.TemporaryDirectory] = []
         self.model_max_len = model_max_len
         self.enable_multimodal = enable_multimodal
@@ -711,7 +722,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 video_placeholder_tokens = [vision_start_id, video_pad_id, vision_end_id]
 
                 token_ids = token_ids[:insert_pos] + video_placeholder_tokens + token_ids[insert_pos:]
-                
+
         prompt = TokensPrompt(
             prompt_token_ids=token_ids, multi_modal_data=multi_modal_data
         )
