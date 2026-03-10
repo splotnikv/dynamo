@@ -31,6 +31,7 @@ from ..multimodal_utils import (
 )
 from ..multimodal_utils.embedding_cache import EmbeddingCache
 from ..multimodal_utils.model import is_qwen_vl_model
+from ..multimodal_utils.tracer import write_trace
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,14 @@ class EncodeWorkerHandler:
             await transfer_future
             queue.task_done()
 
+    _trace_id_counter: int = 0
+
+    @classmethod
+    def _get_trace_id(cls) -> str:
+        """Return a new unique trace ID for correlating begin/end events."""
+        cls._trace_id_counter += 1
+        return f"ENC-{cls._trace_id_counter}"
+
     def cleanup(self):
         self.send_complete_queue.put_nowait(
             (None, None)
@@ -135,6 +144,10 @@ class EncodeWorkerHandler:
         logger.debug(f"Received encode request: {{ id: {request.request_id} }}.")
 
         request_id = request.request_id
+        trace_id = EncodeWorkerHandler._get_trace_id()
+
+        print(f"+-+ encode_worker_handler.py::EncodeWorkerHandler::generate() req={request_id}")
+        write_trace("enc", "enc_gen", "begin", trace_id, f"encode_worker_handler.py::EncodeWorkerHandler::generate() req={request_id}")
 
         # The following steps encode the requested image and provided useful embeddings.
         # 1. Open the image from the provided URL.
@@ -179,6 +192,7 @@ class EncodeWorkerHandler:
 
             with _nvtx.annotate("mm:enc:image_load", color="green"):
                 # Load and generate image tensors
+                write_trace("enc", "image_loading", "begin", trace_id)
                 image_tasks = []
                 image_to_load = []
                 for idx, _ in need_encode_indexes:
@@ -205,22 +219,28 @@ class EncodeWorkerHandler:
                     raise ValueError(
                         f"Errors occurred during image loading:\n{collective_exceptions}"
                     )
+                write_trace("enc", "image_loading", "end", trace_id)
 
             if loaded_images:
                 with _nvtx.annotate("mm:enc:image_preprocess", color="yellow"):
+                    write_trace("enc", "image_preprocessing", "begin", trace_id)
                     image_embeds = await asyncio.to_thread(
                         self.image_processor, images=loaded_images, return_tensors="pt"
                     )
+                    write_trace("enc", "image_preprocessing", "end", trace_id)
 
                 with _nvtx.annotate("mm:enc:vision_encode", color="red"):
                     # Encode the image embeddings using model-specific encoder
+                    write_trace("enc", "encode_embeddings", "begin", trace_id)
                     embeddings = await asyncio.to_thread(
                         encode_image_embeddings,
                         model_name=self.model,
                         image_embeds=image_embeds,
                         vision_encoder=self.vision_encoder,
                         projector=self.projector,
+                        trace_id=trace_id,
                     )
+                    write_trace("enc", "encode_embeddings", "end", trace_id)
 
                 with _nvtx.annotate("mm:enc:split_embeddings", color="orange"):
                     # [gluo FIXME] This is specific to qwen vision processing..
@@ -270,6 +290,7 @@ class EncodeWorkerHandler:
 
             with _nvtx.annotate("mm:enc:embedding_transfer", color="purple"):
                 # Prepare transfer
+                write_trace("enc", "save_embeddings", "begin", trace_id)
                 send_tasks = [
                     asyncio.create_task(
                         self.embedding_sender.send_embeddings(
@@ -279,6 +300,7 @@ class EncodeWorkerHandler:
                     for embedding_item in embedding_lists
                 ]
                 transfer_requests = await asyncio.gather(*send_tasks)
+                write_trace("enc", "save_embeddings", "end", trace_id)
 
                 after_transfer_time = time.perf_counter()
 
@@ -323,3 +345,6 @@ class EncodeWorkerHandler:
         except Exception as e:
             logger.error(f"Error processing request {request_id}: {e}")
             raise
+
+        write_trace("enc", "enc_gen", "end", trace_id)
+

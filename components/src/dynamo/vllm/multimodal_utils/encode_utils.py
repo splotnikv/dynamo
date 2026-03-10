@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional
 import torch
 
 from .model import SupportedModels, is_model_supported, is_qwen_vl_model
+from .tracer import write_trace
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def get_embedding_hash(key: str) -> str:
 
 
 def get_qwen_image_features(
-    vision_encoder: torch.nn.Module, image_embeds: Dict[str, Any]
+    vision_encoder: torch.nn.Module, image_embeds: Dict[str, Any], trace_id: str = ""
 ) -> torch.Tensor:
     """
     Extract image features using Qwen-style vision encoder.
@@ -64,7 +65,9 @@ def get_qwen_image_features(
         if grid_thw is None:
             raise ValueError("grid_thw is not provided")
         grid_thw = grid_thw.tolist()
+        write_trace("enc", "vit_forward1", "begin", trace_id)
         image_embeds = vision_encoder(pixel_values, grid_thw=grid_thw)
+        write_trace("enc", "vit_forward1", "end", trace_id)
         return image_embeds
 
     pixel_values = image_embeds["pixel_values"].to(vision_encoder.device)
@@ -76,11 +79,14 @@ def get_qwen_image_features(
     else:
         raise ValueError("grid_thw is not provided")
 
-    return (
+    write_trace("enc", "vit_forward2", "begin", trace_id)
+    result = (
         vision_encoder.get_image_features(pixel_values, grid_thw)  # type: ignore
         if grid_thw is not None
         else vision_encoder.get_image_features(pixel_values)  # type: ignore
     )
+    write_trace("enc", "vit_forward2", "end", trace_id)
+    return result
 
 
 def encode_image_embeddings(
@@ -88,6 +94,7 @@ def encode_image_embeddings(
     image_embeds: Dict[str, Any],
     vision_encoder: torch.nn.Module,
     projector: Optional[torch.nn.Module] = None,
+    trace_id: str = "",
 ) -> torch.Tensor:
     """
     Encode image embeddings using the appropriate model-specific encoder.
@@ -117,7 +124,7 @@ def encode_image_embeddings(
             embeddings = projector(vision_outputs.last_hidden_state)
 
         elif is_qwen_vl_model(model_name):
-            embeddings = get_qwen_image_features(vision_encoder, image_embeds)
+            embeddings = get_qwen_image_features(vision_encoder, image_embeds, trace_id)
 
         else:
             raise NotImplementedError(f"Model not supported: {model_name}")

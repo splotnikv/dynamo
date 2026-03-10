@@ -28,6 +28,7 @@ from dynamo.common.multimodal.image_loader import ImageLoader
 from dynamo.common.utils.engine_response import normalize_finish_reason
 from dynamo.common.utils.input_params import InputParamManager
 from dynamo.common.utils.otel_tracing import build_trace_headers
+from dynamo.vllm.multimodal_utils.tracer import write_trace
 from dynamo.llm import (
     KvEventPublisher,
     ModelInput,
@@ -1298,21 +1299,34 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             enable_frontend_decoding,
         )
 
+    _trace_id_counter: int = 0
+
+    @classmethod
+    def _get_trace_id(cls) -> str:
+        """Return a new unique trace ID for correlating begin/end events."""
+        cls._trace_id_counter += 1
+        return f"EPD-{cls._trace_id_counter}"
+
     async def generate(self, request, context):
         # Use context ID for request tracking and correlation
         request_id = context.id()
+        trace_id = DecodeWorkerHandler._get_trace_id()
         logger.debug(f"Decode Request ID: {request_id}")
+        write_trace("epd", "dec_gen", "begin", trace_id, f"handlers.py::DecodeWorkerHandler::generate() req={request_id}")
 
         if self.use_vllm_tokenizer:
             # Text-in-text-out mode: use InputParamManager and OpenAI-compatible format
-            async for chunk in self._generate_text_mode(request, context, request_id):
+            async for chunk in self._generate_text_mode(request, context, request_id, trace_id):
                 yield chunk
         else:
             # Token-in-token-out mode: internal protocol format
-            async for chunk in self._generate_token_mode(request, context, request_id):
+            async for chunk in self._generate_token_mode(request, context, request_id, trace_id):
                 yield chunk
 
-    async def _generate_token_mode(self, request, context, request_id):
+        write_trace("epd", "dec_gen", "end", trace_id)
+
+
+    async def _generate_token_mode(self, request, context, request_id, trace_id=""):
         """Generate tokens using internal protocol format (token-in-token-out)."""
         # Extract and decode multimodal data if present
         multi_modal_data = await self._extract_multimodal_data(request)
@@ -1364,9 +1378,13 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         dp_rank = self._to_local_dp_rank(routing.get("dp_rank"))
         priority = routing.get("priority", 0)
 
-        trace_headers = build_trace_headers(context)
+        trace_headers = build_trace_headers(context) or {}
+        trace_headers["x-dynamo-trace-id"] = trace_id
 
+        write_trace("epd", "dec_forward1", "begin", trace_id)
         async with self._abort_monitor(context, request_id):
+            first_token = True
+            write_trace("epd", "epd_first_token", "begin", trace_id)
             try:
                 async for tok in self.generate_tokens(
                     prompt,
@@ -1378,6 +1396,13 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                     trace_headers=trace_headers,
                     priority=priority,
                 ):
+                    if first_token:
+                        write_trace("epd", "epd_first_token", "end", trace_id)
+                        write_trace("epd", "epd_next_token", "begin", trace_id)
+                        first_token = False
+                    else:
+                        write_trace("epd", "epd_next_token", "end", trace_id)
+                        write_trace("epd", "epd_next_token", "begin", trace_id)
                     if prefill_result is not None and "completion_usage" in tok:
                         tok["completion_usage"][
                             "prompt_tokens_details"
@@ -1388,8 +1413,14 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 logger.warning("Initiating Dynamo Runtime shutdown.")
                 self.runtime.shutdown()
                 os._exit(1)
+            finally:
+                if first_token:
+                    write_trace("epd", "epd_first_token", "end", trace_id)
+                else:
+                    write_trace("epd", "epd_next_token", "end", trace_id)
+        write_trace("epd", "dec_forward1", "end", trace_id)
 
-    async def _generate_text_mode(self, request, context, request_id):
+    async def _generate_text_mode(self, request, context, request_id, trace_id=""):
         """Generate text using OpenAI-compatible format (text-in-text-out)."""
         # Get text input using InputParamManager
         input_data = self.input_param_manager.get_input_param(
@@ -1413,8 +1444,10 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         openai_request_id = request.get("id") or request.get("request_id", request_id)
         previous_text = ""
 
-        trace_headers = build_trace_headers(context)
+        trace_headers = build_trace_headers(context) or {}
+        trace_headers["x-dynamo-trace-id"] = trace_id
 
+        write_trace("epd", "dec_forward2", "begin", trace_id)
         async with self._abort_monitor(context, request_id):
             try:
                 gen = self.engine_client.generate(
@@ -1477,6 +1510,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 logger.warning("Initiating Dynamo Runtime shutdown.")
                 self.runtime.shutdown()
                 os._exit(1)
+        write_trace("epd", "dec_forward2", "end", trace_id)
 
 
 class PrefillWorkerHandler(BaseWorkerHandler):
